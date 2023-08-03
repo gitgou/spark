@@ -1277,6 +1277,39 @@ class Analyzer(override val catalogManager: CatalogManager) extends RuleExecutor
 
   /** Handle INSERT INTO for DSv2 */
   object ResolveInsertInto extends ResolveInsertionBase {
+    private def lookupCatalogTable(u: UnresolvedRelation,
+                                   timeTravelSpec: Option[TimeTravelSpec] = None): Option[Table] = {
+      expandIdentifier(u.multipartIdentifier) match {
+        case CatalogAndIdentifier(catalog, ident) =>
+          // scalastyle:off
+          println("CataloAndIndentift: lookupCatalogTable", catalog, ident)
+          // catalog is V2SessionCatalog
+          val key = catalog.name +: ident.namespace :+ ident.name
+          // table is None when not create table in one session
+          println("loadTable from catalog")
+          CatalogV2Util.loadTable(catalog, ident, timeTravelSpec)
+        case _ => None
+      }
+    }
+
+    private def addGraphId(query: UnresolvedInlineTable, catalog: CatalogTable, userSpecifiedCols: Seq[String], fieldName: String):
+    (UnresolvedInlineTable, Seq[String]) = {
+      val index: Option[Int] = catalog.schema.getFieldIndex(fieldName)
+      val field = catalog.schema.apply(index.get);
+      var Id = field.metadata.getLong("AutoIncrement");
+      val newName = "col" + (query.names.length + 1).toString
+      val newQuery = query.copy(names = query.names :+ newName, rows = query.rows.map((l: Seq[Expression]) => {
+        Id += 1;
+        l :+ Literal(GraphTable(fieldName, catalog.identifier.unquotedString, Id).toString())
+      }))
+
+      if (userSpecifiedCols.nonEmpty) {
+        userSpecifiedCols.+(fieldName)
+      }
+      // TODO change table schema
+      (newQuery, userSpecifiedCols)
+    }
+
     override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsWithPruning(
       AlwaysProcess.fn, ruleId) {
       case i @ InsertIntoStatement(r: DataSourceV2Relation, _, _, _, _, _, _)
@@ -1320,6 +1353,36 @@ class Analyzer(override val catalogManager: CatalogManager) extends RuleExecutor
             OverwriteByExpression.byPosition(r, query, staticDeleteExpression(r, staticPartitions))
           }
         }
+
+      // Auto Insert Node ID or Edge ID  If table is  graph
+      case i @ InsertIntoStatement(table, _, userSpecifiedCols: Seq[String],
+      query: UnresolvedInlineTable, _, _, _) if !i.query.resolved =>
+        val catalogTable = table match {
+          case u: UnresolvedRelation if !u.isStreaming =>
+            lookupCatalogTable(u).getOrElse(None)
+          case _ => None
+        }
+
+        catalogTable match {
+          case t@V1Table(catalog: CatalogTable) =>
+            if (catalog.schema.getFieldIndex("node_id").isDefined) {
+              val res = addGraphId(query, catalog, userSpecifiedCols, "node_id")
+              i.copy(query = res._1, userSpecifiedCols = res._2)
+            } else if (catalog.schema.getFieldIndex("edge_id").isDefined) {
+              val res = addGraphId(query, catalog, userSpecifiedCols, "edge_id")
+              i.copy(query = res._1, userSpecifiedCols = res._2)
+            } else {
+              i
+            }
+          case _ => i
+        }
+    }
+
+    /*
+    * add EdgeId/NodeId for graph table;
+    */
+    case class GraphTable(tableType: String, tableName: String, Id: Long) {
+      override def toString(): String = s"type:$tableType,table:$tableName,ID:$Id"
     }
 
     private def partitionColumnNames(table: Table): Seq[String] = {

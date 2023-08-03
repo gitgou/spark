@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.analysis
 
 import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.catalyst.{FunctionIdentifier, InternalRow, TableIdentifier}
+import org.apache.spark.sql.catalyst.{FunctionIdentifier, InternalRow, SQLConfHelper, TableIdentifier}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
@@ -371,8 +371,8 @@ abstract class Star extends LeafExpression with NamedExpression {
  *              targets' columns are produced. This can either be a table name or struct name. This
  *              is a list of identifiers that is the path of the expansion.
  */
-case class UnresolvedStar(target: Option[Seq[String]]) extends Star with Unevaluable {
-
+case class UnresolvedStar(target: Option[Seq[String]]) extends Star
+  with Unevaluable with SQLConfHelper{
   /**
    * Returns true if the nameParts is a subset of the last elements of qualifier of the attribute.
    *
@@ -403,6 +403,13 @@ case class UnresolvedStar(target: Option[Seq[String]]) extends Star with Unevalu
   override def expand(
       input: LogicalPlan,
       resolver: Resolver): Seq[NamedExpression] = {
+    // scalastyle:off println
+    println("input.outPUt: ", input.output)
+    val output = conf.isShowGraphTableInnerField match {
+      case true => input.output
+      case false => input.output.filter(o => !conf.graphInnerCols.contains(o.name))
+    }
+    println("input.outPUt: ", output)
     // If there is no table specified, use all non-hidden input attributes.
     if (target.isEmpty) return input.output
 
@@ -414,7 +421,7 @@ case class UnresolvedStar(target: Option[Seq[String]]) extends Star with Unevalu
       // keep any restrictions that may break column resolution for normal attributes.
       // See SPARK-42084 for more details.
       .map(_.markAsAllowAnyAccess())
-    val expandedAttributes = (hiddenOutput ++ input.output).filter(
+    val expandedAttributes = (hiddenOutput ++ output).filter(
       matchedQualifier(_, target.get, resolver))
 
     if (expandedAttributes.nonEmpty) return expandedAttributes

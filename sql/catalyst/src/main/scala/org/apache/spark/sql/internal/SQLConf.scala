@@ -4358,6 +4358,13 @@ object SQLConf {
       .checkValue(_ >= 0, "The threshold of cached local relations must not be negative")
       .createWithDefault(64 * 1024 * 1024)
 
+  val SHOW_GRAPH_TABLE_INNER_FIELD =
+    buildConf("spark.sql.showGraphTableInnerField")
+      .doc("This Boolean value determines whether it is displayed GraphTable' inner field")
+      .version("3.5.0")
+      .booleanConf
+      .createWithDefault(false)
+
   /**
    * Holds information about keys that have been deprecated.
    *
@@ -4500,6 +4507,11 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def optimizerInSetConversionThreshold: Int = getConf(OPTIMIZER_INSET_CONVERSION_THRESHOLD)
 
+  def isShowGraphTableInnerField : Boolean = getConf(SHOW_GRAPH_TABLE_INNER_FIELD)
+
+  def graphInnerCols: Seq[String] = {
+    Seq("node_id") :+ "edge_id" :+ "from_id" :+ "to_id"
+  }
   def optimizerInSetSwitchThreshold: Int = getConf(OPTIMIZER_INSET_SWITCH_THRESHOLD)
 
   def planChangeLogLevel: String = getConf(PLAN_CHANGE_LOG_LEVEL)

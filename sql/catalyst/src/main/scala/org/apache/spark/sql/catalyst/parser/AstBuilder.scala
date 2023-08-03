@@ -1622,6 +1622,25 @@ class AstBuilder extends DataTypeAstBuilder with SQLConfHelper with Logging {
       })
   }
 
+  /*
+  * visit Match Expression, transform match clause to filter
+   */
+  override def visitMatch(ctx: MatchContext): Expression = withOrigin(ctx) {
+    withMatch(ctx.matchExpression)
+  }
+
+  private def withMatch(ctx: MatchExpressionContext): Expression = withOrigin(ctx) {
+
+    val rightExpress = UnresolvedAttribute(visitMultipartIdentifier(ctx.rightNode) :+ "node_id")
+    val leftExpress = UnresolvedAttribute(visitMultipartIdentifier(ctx.leftNode) :+ "node_id")
+
+    val left = EqualTo(leftExpress,
+      UnresolvedAttribute(visitMultipartIdentifier(ctx.edgeTable) :+ "from_id"))
+    val right = EqualTo(rightExpress,
+      UnresolvedAttribute(visitMultipartIdentifier(ctx.edgeTable) :+ "to_id"))
+    And(left, right)
+  }
+
   /**
    * Create an inline table (a virtual table in Hive parlance).
    */
@@ -3871,6 +3890,35 @@ class AstBuilder extends DataTypeAstBuilder with SQLConfHelper with Logging {
     val tableSpec = UnresolvedTableSpec(properties, provider, options, location, comment,
       serdeInfo, external)
 
+    if (ctx.NODE != null && ctx.EDGE != null) {
+      operationNotAllowed("Not Simultaneously Allowed CREATE TABLE AS NODE And EDGE", ctx)
+    }
+
+    var graphCol: Seq[StructField] = Seq();
+    if (ctx.NODE != null) {
+      val builder = new MetadataBuilder;
+      builder.putLong("AutoIncrement", 0)
+      //        .putString(METADATA_COL_ATTR_KEY, "node_id")
+      //        .putBoolean(QUALIFIED_ACCESS_ONLY, true)
+      graphCol = graphCol :+ StructField("node_id", StringType,
+        nullable = false, builder.build());
+      // scalastyle:off
+      println("Create NODE TABLE")
+    }
+    // Add edge props
+    if (ctx.EDGE != null) {
+      val builder = new MetadataBuilder;
+      builder.putLong("AutoIncrement", 0)
+      //        .putString(METADATA_COL_ATTR_KEY, "edge_id")
+      //        .putBoolean(QUALIFIED_ACCESS_ONLY, true)
+      graphCol = graphCol ++
+        Seq(
+          StructField("from_id", StringType, nullable = false),
+          StructField("to_id", StringType, nullable = false),
+          StructField("edge_id", StringType, nullable = false, builder.build()))
+      println("Create EDGE TABLE")
+    }
+
     Option(ctx.query).map(plan) match {
       case Some(_) if columns.nonEmpty =>
         operationNotAllowed(
@@ -3890,7 +3938,7 @@ class AstBuilder extends DataTypeAstBuilder with SQLConfHelper with Logging {
       case _ =>
         // Note: table schema includes both the table columns list and the partition columns
         // with data type.
-        val schema = StructType(columns ++ partCols)
+        val schema = StructType(columns ++ partCols ++ graphCol)
         CreateTable(withIdentClause(identifierContext, UnresolvedIdentifier(_)),
           schema, partitioning, tableSpec, ignoreIfExists = ifNotExists)
     }
